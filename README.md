@@ -30,6 +30,8 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 
+Personal fork design discussions: [Project collaboration assistant](docs/assistant-design/README.md) (Chinese; current conclusions and open proposals, not implemented features).
+
 ## Development
 
 `pnpm check` runs the typecheck, the tests and the build.
