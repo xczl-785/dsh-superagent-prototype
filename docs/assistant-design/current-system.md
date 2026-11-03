@@ -42,6 +42,17 @@ PR 反馈到绑定工单，报告中的具体人工问题与结果通过主会�
 
 依据：[work.md](../../prompts/work.md)、[worker.md](../../prompts/worker.md)、[github-pull.ts](../../src/sources/github-pull.ts)、[executor tools](../../src/app/tools/executor.ts)、[notices.ts](../../src/app/notices.ts)。
 
+### 创建、启动与回报的现有边界
+
+2026-11-03 针对最小交接流程的静态核对：
+
+- [Tickets.create](../../src/core/tickets.ts) 保存工单、建立待执行 Assignment 并请求启动；[DshExecutor.start](../../src/executor/dsh.ts) 将启动放入 effects 队列，受暂停与可用执行名额影响。创建成功不等于已经启动。
+- 执行器向 worker 会话投递任务后调用 [Assignments.started](../../src/core/assignments.ts)，记录 running 并发出 `assignment.started`；该确认不能严格等同于模型已开始处理第一步。
+- [reportRelay](../../src/app/notices.ts) 将人工问题、结果、阻塞等转换为回报，普通且不回答问题的 progress 保留在内部。[Sessions](../../src/app/sessions.ts) 的 relay 目标是既有主 Session；当前事件通知也未把 assignment.started 自动转给项目助手。
+- 已有工单状态、领域事件与回报投递基础，但没有新项目助手的完整工单事件订阅通路。Thread 订阅负责将来源消息送入工单，不能视为上述反馈订阅已经存在。
+
+这是静态行为核对，未运行验证。交接与回程的已确认方向及高重要性标记由 [design-focus.md](design-focus.md) 维护；具体来源适配、关联和投递机制未选定。
+
 ## 为什么现有主会话不能直接等同于协作助手
 
 用户可以在插件界面打开主会话，最初以为它承担需求沟通角色。当前提示词却主要让它准入、路由、派工和转达，要求不要替执行器展开实施计划、验收标准或技术设计；执行器根据原始请求做具体工作。
