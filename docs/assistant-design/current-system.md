@@ -52,6 +52,31 @@ PR 反馈到绑定工单，报告中的具体人工问题与结果通过主会�
 
 原有 worker 绑定已接受的 Ticket、Assignment、范围和交付报告。复用 DSH 会话能力与直接复用 worker 业务语义是不同选择；“权限受限 worker 是否足够”仍未决定。
 
+## 与协作助手方案有关的兼容边界
+
+2026-11-03 回拉静态实现与上游面板文档后确认：
+
+- [005 Panel](../005-panel.md) 与 [ExecutionStatus](../../src/client/execution.tsx) 已有并行 Ticket 列表、筛选、负载和暂停入口；[overview.ts](../../src/app/views/overview.ts) 汇总待人工事项，不能直接认定缺少全新的状态面板。
+- [ticket.tsx](../../src/client/ticket.tsx) 已提供执行会话入口、输入和订阅详情、人工问题及返回外部渠道回答的入口；[app.tsx](../../src/client/app.tsx) 提供打开原主 Session 的入口。
+- 核心 [Ticket](../../src/core/model.ts) 是授权工作单元，与 RouteLedger 阶段责任不同。设计已明确不新增 Feature 实体，用户的需求语义不要求一层对应模型。
+- [intake.ts](../../src/core/intake.ts) 按 Thread 订阅向工单扇出消息。若把整个助手长期对话当成普通可订阅 Thread，后续无关讨论可能进入此前订阅的工单；这是直接复用该语义时的兼容风险，不是对已实现助手的运行缺陷报告。
+
+以上为兼容核对，未修改代码，也未运行插件。目标与责任选择在 [design-focus.md](design-focus.md)，剩余问题见 [interaction-proposals.md](interaction-proposals.md)。
+
+### 现有对象与接口的充分性
+
+后续静态核对支持“现有对象可承载主要使用需求，协作操作入口仍需适配”：
+
+| 能力 | 已有支撑与限制 |
+| --- | --- |
+| 查询状态与详情 | [api.ts](../../src/app/api.ts) 提供 overview/tickets 等查询；[resources.ts](../../src/app/resources.ts) 提供报告、输入、执行 transcript 及逐消息分页读取，存在角色和访问范围限制 |
+| 新工作进入执行 | [main.ts](../../src/app/tools/main.ts) 的 orchestrator_route 依赖已记录的 trigger_id；[Engine.decide](../../src/core/engine.ts) 沿既有准入、决定、工单链路执行，不是任意助手文本直接建单 |
+| 定向追加要求或答复 | [Engine.attach](../../src/core/engine.ts) 复用 Trigger 并订阅其 Thread；不能直接当作“仅交接本次选定内容”的通用入口 |
+| 提供背景事实 | orchestrator_ticket_note 只提供事实，不授予新工作权限，不能替代用户要求的追加 |
+| 停止与重试 | Engine 命令、管理 API 和部分主会话工具已有支撑，继续遵守对象状态及权限限制 |
+
+因此后续重点是新工作来源和定向输入的接口适配、原始依据与授权的表达；不绕过既有校验，也不新增 Feature 状态。已有执行 transcript 读取不等于已具备新协作助手全部历史的搜索接口；仍需核验可复用范围。
+
 ## 本地接续环境
 
 - 工作分支为 `dev`，跟踪 `origin/dev`。`main` 用于上游同步，`master` 为个人集成分支。
