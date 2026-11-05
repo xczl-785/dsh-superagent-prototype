@@ -40,6 +40,8 @@ A01 已修正首次安装与状态表达：未提供 stateDir 时根据 Harness 
 
 A03 已整理角色与助手接入：助手工具定义由 [assistant tools](../../src/app/tools/assistant.ts) 维护，交接业务保留在 Assistant；原始历史查询由 Sessions 适配 Harness 持久化。三个固定角色通过明确的预设与模型配置共用提示词、skill、工具装饰和释放流程，保留各角色既有权限与助手复用研判模型的约定。相关 112 项检查、类型检查与构建通过；没有改变会话恢复策略或持久化键格式。
 
+A04 已集中本地来源与反馈职责：[AssistantSource](../../src/sources/assistant.ts) 校验真实用户来源、转换 Trigger 并声明固定本地身份；公共准入逻辑不再硬编码该身份。[AssistantFeedback](../../src/app/assistant-feedback.ts) 在工单创建事务中统一维护反馈关联，并选择 worker 报告和执行器失败的回报目标；业务层不再重复写入关联。旧 KV 记录与工具接口保持兼容，外部渠道继续走原链路。检查覆盖未注册来源、后台重新接单、外部工单隔离和策略变更。
+
 ## 上下文恢复与信息归属
 
 Harness 持久化原始会话。`assistant_history` 按事件位置分页或搜索可见交流，过滤推理块及内部流式事件，返回原始用户消息 id；读取历史时可补回用户来源记录。查询有窗口上限，继续使用 next_offset，不宣称一次读取覆盖全部历史。
@@ -62,4 +64,4 @@ Harness 持久化原始会话。`assistant_history` 按事件位置分页或搜�
 
 本地检查使用 `node node_modules/typescript/bin/tsc --noEmit`、`node node_modules/vitest/vitest.mjs run` 和 `node node_modules/tsdown/dist/run.mjs`。安装包通过 `npm pack --ignore-scripts --pack-destination .artifacts --cache .npm-cache` 生成，产物为 `.artifacts/dsh-superagent-0.1.0.tgz`。解包后使用现有依赖导入真实插件入口作冒烟检查，不启动或安装到用户的 Harness。
 
-?? A01?A03?A04 ????????? 1193 ???43 ??????????? Windows ???????????????? `.artifacts/test-results-a04.json`??????????????????????????????????????????????????? GitHub ??????????
+本批 A01、A03、A04 收束时，全量检查为 1193 通过、43 失败，失败名称与修改前 Windows 基线一致，无新增失败；报告为 `.artifacts/test-results-a04.json`。类型检查、构建、重新打包和解包后插件入口导入通过。本批未操作桌面或修改用户运行配置，真实 GitHub 与模型试用仍未进行。
