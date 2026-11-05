@@ -100,6 +100,7 @@ function SearchResults({ result, query, onClose }: { result: SearchView; query: 
 
 function Header({ masterId }: { masterId: string | undefined }) {
   const { t, call, openSession, notify } = usePanel()
+  const { state, reload } = usePanelData()
   const [glossary, setGlossary] = useState(false)
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<{ query: string; value: SearchView }>()
@@ -131,8 +132,15 @@ function Header({ masterId }: { masterId: string | undefined }) {
       </form>
       <Button variant="ghost" size="sm" icon={<Icon name="question" />} aria-label={t('glossary')} title={t('glossary')} aria-haspopup="dialog"
         onClick={() => setGlossary(true)} />
-      <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!masterId}
-        onClick={() => { if (masterId) openSession(masterId).catch(failure => notify(errorText(failure))) }}>{t('openMaster')}</Button>
+      <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!state?.assistantId}
+        onClick={() => { if (state?.assistantId) openSession(state.assistantId).catch(failure => notify(errorText(failure))) }}>{t('projectAssistant')}</Button>
+      <details><summary>{t('advanced')}</summary>
+        <label><input type="checkbox" checked={state?.showRouter ?? false} onChange={event => {
+          call('PUT assistant/display', { body: { show: event.target.checked } }).then(() => reload(), failure => notify(errorText(failure)))
+        }} />{t('showRouter')}</label><p>{t('routerHelp')}</p>
+      </details>
+      {state?.showRouter && <Button variant="outline" size="sm" disabled={!masterId}
+        onClick={() => { if (masterId) openSession(masterId).catch(failure => notify(errorText(failure))) }}>{t('backgroundRouter')}</Button>}
     </div>
     <Glossary open={glossary} onClose={() => setGlossary(false)} />
   </header>

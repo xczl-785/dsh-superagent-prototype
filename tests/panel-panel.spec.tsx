@@ -7,6 +7,29 @@ import { usePanel, mount, remount, settle, all, click, type, text, field } from 
 import { server, found } from './fixtures/panel-server.ts'
 
 usePanel()
+it('opens the assistant and makes the background router entry opt-in without changing execution', async () => {
+  await mount()
+  expect(all('button').some(button => button.textContent === zh.backgroundRouter)).toBe(false)
+  await click(zh.projectAssistant)
+  expect(server.opened).toEqual(['assistant-test'])
+  await click(document.querySelector<HTMLInputElement>('.dt-head input[type="checkbox"]')!)
+  expect(server.showRouter).toBe(true)
+  await click(zh.backgroundRouter)
+  expect(server.opened).toEqual(['assistant-test', 'master'])
+  expect(server.requests.some(item => item.path.includes('executor/pause'))).toBe(false)
+  await remount()
+  expect(all('button').some(button => button.textContent === zh.backgroundRouter)).toBe(true)
+})
+
+it('carries a selected real work reference into the assistant through the focus endpoint', async () => {
+  await mount()
+  await click('修复回归')
+  await click(zh.discussWork)
+  expect(server.requests.some(item => item.path.endsWith('assistant/focus')
+    && (item.body as { ticket_id?: string })?.ticket_id === 't1')).toBe(true)
+  expect(server.opened).toEqual(['assistant-test'])
+})
+
 it('states why a filtered search result has no Thread instead of opening an empty one', async () => {
   server.search = { items: [found('e9', '2026-09-20T00:00:00Z', { source: 'github', actor: { source: 'github', id: 'someone' },
     preview: 'issue text', threads: ['github:7'],

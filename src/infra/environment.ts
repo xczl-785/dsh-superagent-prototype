@@ -24,7 +24,8 @@ export const credentialHelper = (cli: string): string => `!${shellQuote(cli)} au
 
 export function sameDirectory(a: string, b: string): boolean {
   const real = (path: string): string => { try { return realpathSync(path) } catch { return resolve(path) } }
-  return real(a) === real(b)
+  const left = real(a), right = real(b)
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
 }
 export function withoutDirectory(path: string, dir: string): string {
   return path.split(delimiter).filter(entry => !sameDirectory(entry, dir)).join(delimiter)

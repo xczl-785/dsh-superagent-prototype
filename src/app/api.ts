@@ -19,6 +19,8 @@ type Delivery = 'injected' | 'pending'
 
 export interface Api {
   'GET state': { response: StateView }
+  'PUT assistant/display': { body: { show: boolean }; response: { show: boolean } }
+  'POST assistant/focus': { body: { ticket_id: string }; response: { session_id: string } }
   'GET overview': { response: OverviewView }
   'GET search': { query: { q: string }; response: SearchView }
   'GET sources': { response: SourceStatusView[] }

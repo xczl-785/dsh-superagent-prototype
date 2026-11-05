@@ -4,6 +4,7 @@
  */
 import { LIMITS } from './limits.ts'
 import { z } from 'zod'
+import { isAbsolute } from 'node:path'
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell, type AdmissionRow } from './admission.ts'
 import { key, type AssessmentOutcome, type Mandate, type Policy, type PolicyEffect, type SourceScope, type Strength, type Thread, type Ticket,
   type Trigger, type ActorRef, type GateResult } from './core/index.ts'
@@ -91,7 +92,7 @@ const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => n
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
-  directory: z.string().trim().refine(path => path === '' || path.startsWith('/'), 'An absolute path, or empty for <stateDir>/work').default(''),
+  directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
@@ -117,6 +118,8 @@ export function policyVersion(settings: Settings): string {
   return key(POLICY_REVISION, JSON.stringify({ rules: settings.policy.rules, mode: settings.eval.mode, sources: settings.policy.sources }))
 }
 export function allowedSender(settings: Settings, actor: ActorRef): z.infer<typeof AllowedSchema> | undefined {
+  // This identity is assigned only by Assistant after observing a real local DSH user message; tools cannot supply it.
+  if (actor.source === 'assistant' && actor.id === 'local-user') return { id: 'local-user', name: 'Local DSH user' }
   return settings.policy.sources[actor.source]?.allowed.find(entry => sameName(entry.id, actor.id))
 }
 /** Look up `actor` in the Source's `bots` policy list (validated by the Source's kind), whose messages are admitted as inferred candidates at most. */

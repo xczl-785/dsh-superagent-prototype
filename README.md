@@ -30,7 +30,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 
-Personal fork design discussions: [Project collaboration assistant](docs/assistant-design/README.md) (Chinese; current conclusions and open proposals, not implemented features).
+Personal fork: [Project collaboration assistant](docs/assistant-design/README.md) (Chinese; goals, boundaries and prototype). See [prototype setup and validation limits](docs/assistant-design/prototype.md) for the implemented increment and outstanding live integration checks.
 
 ## Development
 

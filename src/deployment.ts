@@ -10,10 +10,12 @@ import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
+const absolute = (description: string) => s.string().pattern(process.platform === 'win32' ? /^(?:[a-z]:[\\/]|[\\/])/i : /^\//)
+  .description(`${description} Absolute path on the host operating system.`)
 /** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
 export const Config = s.object({
   stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
+  assistantWorkspace: s.string().default('').description('Absolute path to the local project checkout for the project assistant. Empty uses stateDir; repository evidence must then be fetched explicitly.'),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
     .description('Largest saved prompt configuration, in characters.').volatile(),
   admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
@@ -24,6 +26,7 @@ export const Config = s.object({
 export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
   stateDir: string
+  assistantWorkspace?: string
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
@@ -38,8 +41,9 @@ const MOVED: Record<string, string> = {
 export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
+  const { stateDir, assistantWorkspace, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
+  if (assistantWorkspace && !isAbsolute(assistantWorkspace)) throw new Error('assistantWorkspace must be an absolute path')
+  return { stateDir, ...(assistantWorkspace ? { assistantWorkspace } : {}), promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
 }
 
 export const GithubAccountsSchema = z.object({
@@ -59,7 +63,9 @@ export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
 export function executable(name: string, path: string, exclude?: string): string {
-  if (name.includes('/') && !isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
+  if ((name.includes('/') || (process.platform === 'win32' && name.includes('\\'))) && !isAbsolute(name)) {
+    throw new Error(`${name} must be a command name or an absolute path`)
+  }
   const candidates = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
   for (const candidate of candidates) {
     try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate } }

@@ -30,6 +30,7 @@ export interface SessionsHost {
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
   readonly health: HealthEntry
   readonly masterId: string
+  readonly assistant?: { id: string; prompt(): string; tools(agent: Agent): Tool[]; owns(ticketId: string): boolean }
   readonly lifetime: AbortSignal
   closing(): boolean
   /** Execution environment variables for `ticket`, rendered into its worker's system prompt. */
@@ -103,6 +104,7 @@ export class Sessions {
     // Deliver relays and notices to the main Session in the order they were queued.
     host.effects.handle('relay', ({ text }, requestId) => this.prompt(host.masterId, requestId, text, 'steer'), { ordered: true })
     host.effects.handle('notice', ({ value, summary }, name) => this.inject(name, value, summary), { ordered: true })
+    if (host.assistant) host.effects.handle('assistant-relay', ({ text }, requestId) => this.prompt(host.assistant!.id, requestId, text, 'steer'), { ordered: true })
   }
   /** Subscribes to host agent and session events so newly created sessions are decorated and model-budget retries are reflected in health. Call once at startup. */
   install(): void {
@@ -124,7 +126,7 @@ export class Sessions {
     ctx.inject(['agentPresets'], child => {
       child.on('agent-preset/selected', (sessionId, preset) => {
         const ticketId = ticketOfSession(sessionId), agent = ctx.agents.get(sessionId as SessionId)
-        const ours = sessionId === this.host.masterId ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
+        const ours = sessionId === this.host.assistant?.id ? 'standard' : sessionId === this.host.masterId ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
         if (!ours || preset === ours || !agent) return
         const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
         presets.select(agent, ours).catch(() => {})
@@ -135,19 +137,19 @@ export class Sessions {
     })
   }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
-  async ensure(id: string, cwd: string, title: string, role: 'orchestrator' | 'worker'): Promise<Agent> {
+  async ensure(id: string, cwd: string, title: string, role: 'orchestrator' | 'worker' | 'assistant'): Promise<Agent> {
     const ctx = this.ctx
     let result = await ctx.sessionController.resolveAgent(id as SessionId)
     if ('error' in result && result.error.code === 'session/not-found') {
       const workspace = await ctx.workspaceRegistry.create(cwd)
       // A Session keeps the preset it was created with, one of the bundle's own (cordis.patch.yml).
       await ctx.sessionController.create({ sessionId: id as SessionId, workspaceId: workspace.id,
-        agentPreset: role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
+        agentPreset: role === 'assistant' ? 'standard' : role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
     const settings = this.host.store.settings()
-    await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
+    await initializeRoleModel(ctx, result.agent, role === 'worker' ? settings.executor.model : settings.eval.model)
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
@@ -168,9 +170,20 @@ export class Sessions {
   /** The id of the message `prompt` delivers under `requestId`, which DSH's inbox events name it by. */
   promptedId(requestId: string): MessageId { return messageId(key(requestId)) }
   /** Enqueues a steering relay to the main Session; relays are durable and retried by `Effects` until delivered, at most once per `requestId`. */
-  relay(requestId: string, text: string): void { this.host.effects.enqueue('relay', requestId, { text }) }
+  relay(requestId: string, text: string, ticketId?: string): void {
+    const assistant = ticketId && this.host.assistant?.owns(ticketId)
+    this.host.effects.enqueue(assistant ? 'assistant-relay' : 'relay', requestId, { text })
+  }
   /** Enqueues a durable background notice for injection into the main Session; a new notice with the same `name` replaces a still-waiting notice of that `name`. */
   notify(name: string, value: Record<string, unknown>, summary: string): void { this.host.effects.enqueue('notice', name, { value, summary }) }
+  /** Bring a selected work reference into the assistant without turning it into an execution request. */
+  focusWork(ticketId: string): void {
+    if (!this.host.assistant) throw new Error('Project assistant is unavailable')
+    this.host.effects.enqueue('assistant-relay', key('focus', ticketId, String(Date.now())), {
+      text: JSON.stringify({ kind: 'work_reference', ticket_id: ticketId, read: `ticket/${ticketId}`,
+        note: 'The user opened this work for discussion. This is a reference, not authorization to change or resume it.' }),
+    })
+  }
   /** Waits for currently runnable `notice` effects to settle and returns `'injected'` if notice `name` has reached the main Session or `'pending'` if it is still queued. */
   async delivery(name: string): Promise<'injected' | 'pending'> {
     await this.host.effects.idle('notice')
@@ -232,6 +245,32 @@ export class Sessions {
   private async decorate(agent: Agent): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
+    if (agent.id === host.assistant?.id) {
+      const binding: SessionBinding = { disposers: [] }
+      this.bindings.set(agent, binding)
+      this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
+      if (agent.status === 'idle') this.retryHealth.clear(agent.id)
+      this.updateModelHealth()
+      binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-project-assistant', order: 9999, interpolate: false,
+        text: context => { this.promptFor(agent, context.signal !== undefined); return host.assistant!.prompt() } }))
+      const skills = agent.ctx.inject(['skills'], scope => {
+        binding.scope = scope
+        binding.skills = undefined
+        this.bindSkills(binding, host.prompts.current())
+      })
+      binding.disposers.push(() => { skills.dispose().catch((error: unknown) => {
+        this.ctx.logger.warn('dsh-superagent could not release assistant skills: %s', String(error))
+      }) })
+      await skills
+      if (this.bindings.get(agent) !== binding) return
+      const register = this.registerTool(agent, binding)
+      for (const tool of host.assistant.tools(agent)) register(tool.name, tool.description, tool.schema, tool.execute)
+      const parent = scopeParentOf(agent)
+      const allow = ['read', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'write', 'edit', 'skill', 'job_output', 'job_list', 'job_kill']
+        .filter(name => agent.ctx.tools.get(name, parent))
+      binding.disposers.push(agent.ctx.tools.restrict({ allow }))
+      return
+    }
     const master = agent.id === host.masterId
     const ticket = master ? undefined : this.ticketOf(agent)
     if (!master && !ticket) { this.limitSubagent(agent); return }

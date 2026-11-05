@@ -8,6 +8,12 @@ import { HEALTH_TEXT } from '../sources/host.ts'
 const TEXT = {
   // Shared
   title: ['Superagent', 'Superagent'],
+  projectAssistant: ['项目助手', 'Project assistant'],
+  'health.assistant-relay': ['助手反馈投递', 'Assistant feedback delivery'],
+  showRouter: ['显示后台调度会话', 'Show background routing session'],
+  routerHelp: ['查看 superagent 事件路由与调度过程；隐藏入口不会停止后台运行。', 'Inspect event routing and dispatch; hiding the entry does not stop background processing.'],
+  backgroundRouter: ['后台调度会话', 'Background routing session'],
+  discussWork: ['与助手讨论', 'Discuss with assistant'],
   close: ['关闭', 'Close'],
   cancel: ['取消', 'Cancel'],
   confirm: ['确定', 'Confirm'],

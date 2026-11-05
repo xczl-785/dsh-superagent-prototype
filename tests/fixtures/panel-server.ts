@@ -85,6 +85,7 @@ export const MACHINE = { stateDir: '/srv/dsh-superagent', promptMaxChars: 100000
 
 type Settings = ReturnType<typeof SettingsSchema.parse>
 export interface PanelServer {
+  showRouter: boolean
   joined?: Record<string, string>; joining?: Record<string, string>
   joinError?: string
   settings: Settings; revisions: Record<string, number>
@@ -159,7 +160,7 @@ function sourceStatuses(): SourceStatusRow[] {
 }
 const stateView = (): StateView => ({
   setup: server.setup, load: { running: server.setup.problem ? 0 : 2, queued: 0, maxWorkers: server.settings.executor.maxWorkers },
-  masterId: 'master', paused: server.settings.paused,
+    masterId: 'master', assistantId: 'assistant-test', showRouter: server.showRouter, paused: server.settings.paused,
   // The panel does not read health; the service script does.
   health: {},
 })
@@ -247,6 +248,7 @@ function initial(): PanelServer {
     en: 'Feishu message' } }
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
+    showRouter: false,
     health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [],
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
@@ -292,6 +294,11 @@ const SourceSave = z.object({ enabled: z.boolean(), config: z.unknown() })
 
 const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET state': { answer: stateView },
+  'PUT assistant/display': { body: true, answer: ({ body }) => {
+    server.showRouter = z.object({ show: z.boolean() }).parse(body).show
+    return { show: server.showRouter }
+  } },
+  'POST assistant/focus': { body: true, answer: () => ({ session_id: 'assistant-test' }) },
   'GET overview': { answer: overviewView },
   'GET search': { query: ['q'], answer: async ({ query }) => {
     const q = query.q ?? ''

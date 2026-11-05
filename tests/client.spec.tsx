@@ -36,14 +36,14 @@ async function render(entry: Entry, props: Record<string, unknown>) {
   return { container, dispose: () => { act(() => { root.unmount() }); container.remove() } }
 }
 const openMaster = async (container: HTMLElement) => {
-  const button = [...container.querySelectorAll('button')].find(item => item.textContent === zh.openMaster)!
+  const button = [...container.querySelectorAll('button')].find(item => item.textContent === zh.projectAssistant)!
   await act(async () => { button.click() })
   for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
 const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   const path = new URL(url, 'http://127.0.0.1').pathname.replace('/orchestrator/api/', '')
   if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
-  if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
+  if (path === 'state') return Response.json({ masterId: 'master', assistantId: 'assistant-test', showRouter: false, settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
     setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
   return Response.json({ error: 'unavailable' }, { status: 503 })
 }))
@@ -61,10 +61,10 @@ it('registers a localized main panel, sidebar entry and Plugin Manager row page,
 
 it('opens a listed Session through the workspace from the main panel', async () => {
   serve()
-  const { ctx, main } = fixture(['master'])
+  const { ctx, main } = fixture(['assistant-test'])
   const view = await render(main, { t })
   await openMaster(view.container)
-  expect(ctx.uiWorkspace.openSession).toHaveBeenCalledExactlyOnceWith('master')
+  expect(ctx.uiWorkspace.openSession).toHaveBeenCalledExactlyOnceWith('assistant-test')
   view.dispose()
 })
 

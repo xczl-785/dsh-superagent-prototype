@@ -43,9 +43,13 @@ import { health, type Health, type SourceContext, type SourceHost } from '../sou
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
-import type { ResourceHost } from './resources.ts'
+import type { MainResourceHost, ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
+import { Assistant } from './assistant.ts'
+import { readResource } from './resources.ts'
+import { readTool } from './tools/tool.ts'
+import { z } from 'zod'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -74,6 +78,8 @@ export class Runtime extends Service implements SourceHost {
   private readonly board = new HealthBoard()
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
   readonly masterId: string
+  readonly assistantId: string
+  readonly assistant: Assistant
   private readonly sourceLinks = new TextCache(200_000)
   private readonly stopped = new AbortController()
   private readonly disposers: (() => void)[] = []
@@ -103,6 +109,7 @@ export class Runtime extends Service implements SourceHost {
       const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
+      this.assistantId = `assistant-${key(machine.stateDir)}`
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
       const board = this.board
       const effects = this.effects = new Effects(store, board)
@@ -119,9 +126,31 @@ export class Runtime extends Service implements SourceHost {
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
+        assistant: { id: this.assistantId, prompt: () => this.assistant.recovery(), owns: id => this.assistant.owns(id),
+          tools: agent => {
+            const projectResources: MainResourceHost = { ...resources, sessions: this.sessions, settings: this.settings }
+            return [readTool('Read current project work and source facts. This read grants no execution authority.', false,
+              (resource, offset, limit, signal) => readResource(projectResources, resource, offset, limit, undefined, signal)), ...this.assistant.tools(agent)]
+          } },
         lifetime: this.lifetime,
         closing: () => this.closing(), environment,
         tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
+      this.assistant = new Assistant({ context: ctx, store, sessions, effects, engine: () => this.engine,
+        id: this.assistantId, configured: () => setup.configured() })
+      sources.register({ kind: 'assistant', title: { zh: '项目助手', en: 'Project assistant' },
+        description: { zh: '本地用户定向交接的工作。', en: 'Work explicitly handed off by the local user.' },
+        schema: z.object({}), fields: [], health: [],
+        scope: ({ meta }) => meta.session_id === this.assistantId ? { listened: true, observed: false }
+          : { listened: false, reason: 'source_disabled' },
+        channel: {
+          send: async (_host, message) => {
+            effects.enqueue('assistant-relay', `channel:${message.id}`, { text: JSON.stringify({ kind: 'worker_reply',
+              ticket_id: message.ticketId, text: message.text, purpose: message.kind }) })
+            return 'sent'
+          },
+          link: () => ({ url: '', label: { zh: '项目助手', en: 'Project assistant' } }),
+        },
+      })
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
@@ -136,8 +165,10 @@ export class Runtime extends Service implements SourceHost {
       const policy = () => settingsPolicy(store.settings(), sources)
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
         outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
+          this.assistant.event(event)
           // Notify the main Session only about domain events it did not initiate itself.
-          const notice = this.quiet ? undefined : eventNotice(event, id => store.tickets.get(id))
+          const local = 'ticketId' in event.data && this.assistant.owns(event.data.ticketId)
+          const notice = this.quiet || local ? undefined : eventNotice(event, id => store.tickets.get(id))
           if (notice) sessions.notify(...notice)
           // A person's message that reached an open ticket is the ticket's; the main Session hears of it in the same transaction,
           // and of one for an ended ticket once it resumes, unless it routed the message there itself.
@@ -206,8 +237,12 @@ export class Runtime extends Service implements SourceHost {
       return
     }
     this.sessions.install()
+    this.ctx.on('session/event', (session, event) => {
+      if (event.type === 'user/message') this.assistant.observe(session.id, event.data)
+    })
     this.executor.install()
     await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
+    await this.sessions.ensure(this.assistantId, this.machine.assistantWorkspace || this.machine.stateDir, '项目助手', 'assistant')
     for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() records its failure in health. */ })
     // If stop() was called while awaiting setup, session creation, or policy sync, do not start background loops.
     if (this.closing()) return
@@ -220,6 +255,7 @@ export class Runtime extends Service implements SourceHost {
     const runtime = this
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
+      assistantId: this.assistantId,
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
@@ -231,7 +267,7 @@ export class Runtime extends Service implements SourceHost {
     this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
     try {
       this.assessor.stop()
-      const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
+      const ids = [this.masterId, this.assistantId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
       const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])

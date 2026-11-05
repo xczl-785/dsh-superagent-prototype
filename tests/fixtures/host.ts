@@ -30,6 +30,7 @@ export function feishu(id: string, text: string, overrides: Record<string, unkno
 
 type RegisteredTool = { name: string; execute: (args: unknown, execution: { signal: AbortSignal }) => Promise<unknown> }
 type FakeAgent = {
+  session: { id: string }
   id: string; status: string; inbox: { nextTurn: UserMessage[]; nextStep: UserMessage[] }
   cancel: Mock; inject: Mock<(message: UserMessage) => void>; steer: Mock<(message: UserMessage) => void>; followup: Mock<(message: UserMessage) => void>
 }

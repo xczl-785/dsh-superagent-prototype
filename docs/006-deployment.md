@@ -93,9 +93,23 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |
+| `assistantWorkspace` | no | Absolute local checkout path for the project assistant; empty uses stateDir and requires explicitly fetching repository evidence. Set before first assistant creation; changing this non-volatile option reloads the plugin but does not move an existing DSH Session |
 | `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
 
 After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Changes apply without restart. `stateDir` cannot be changed there. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
+
+### Windows path configuration
+
+On Windows, `stateDir`, `assistantWorkspace` and **Execution → Ticket directory** accept absolute drive paths with either separator, such as `D:/Data/Superagent` or `D:\Data\Superagent`, and UNC paths such as `\\server\share\Superagent`. Paths containing spaces or non-ASCII names are preserved. Relative paths, `C:relative` and `~` shorthand are rejected; empty optional directory fields retain their documented defaults. POSIX absolute paths retain their existing validation on POSIX hosts.
+
+For example, set the plugin's initial directories before its first start:
+
+```yaml
+stateDir: 'D:/Data/Superagent'
+assistantWorkspace: 'D:/Program/dsh-superagent-prototype'
+```
+
+This change adapts path configuration and comparison, not the complete Windows execution toolchain. Existing account probes and worker shims still use `env`/`sh`; their availability and behavior in a real Windows Harness deployment have not been verified. GitHub setup requirements are unchanged. A configured absolute CLI file path may include spaces; a relative path such as `tools\gh.exe` is not a command name and is rejected.
 
 ## Start and stop
 

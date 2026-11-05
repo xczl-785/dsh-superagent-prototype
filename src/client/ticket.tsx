@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react'
 import { ApiError, usePoll, type TicketPageView } from './api.ts'
 import { DisclosureRow, Dot, Icon, Tag, type IconName } from './controls.tsx'
 import { decisionMark, reportDot, ticketMark } from './marks.ts'
-import { usePanel } from './provider.tsx'
+import { usePanel, usePanelData, useAction } from './provider.tsx'
 import { settingsRoute } from './route.ts'
 import { Earlier, ThreadLine, automatedRuns } from './rows.tsx'
 import { actorName, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
@@ -106,7 +106,12 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
 }
 
 export function TicketPage({ id }: { id: string }) {
-  const { t, call } = usePanel()
+  const { t, call, openSession } = usePanel()
+  const { state } = usePanelData()
+  const discuss = useAction(async () => {
+    const result = await call('POST assistant/focus', { body: { ticket_id: id } })
+    await openSession(result.session_id)
+  })
   const { data, error, reload } = usePoll(() => call('GET tickets/:id', { id }), [id])
   const after = async (request: Promise<unknown>) => { await request; await reload() }
   if (!data) return <><PageHead
@@ -127,6 +132,7 @@ export function TicketPage({ id }: { id: string }) {
   const channel = data.channels[0]
   return <>
     <PageHead title={data.title}>
+      {state?.assistantId && <button type="button" className="dt-open" disabled={discuss.busy} onClick={() => { void discuss.run() }}>{t('discussWork')}</button>}
       {opening?.url && <ActionLink href={opening.url}>{t('openThread', { source: valueLabel(t, 'source', opening.source) })}</ActionLink>}
       {data.actions.retry && <ConfirmButton variant="outline" icon="refresh" label={t('retry')} title={t('retryTitle')}
         message={t('retryConfirm', { title: data.title })}

@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
+import { KV } from '../kv.ts'
 import { THREAD_FILTERS, TICKET_FILTERS, type Api, type ApiResponse, type RouteParams } from './api.ts'
 import { sourceSkills } from './context.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -34,13 +35,14 @@ export interface HttpHost {
   readonly sourceLinks: Pick<TextCache, 'entries'>
   readonly sources: SourceRegistry
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged'>
-  readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
+  readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'> & Partial<Pick<Sessions, 'focusWork'>>
   readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels'>
   readonly engine: EngineForPeople
   readonly executor: Pick<DshExecutor, 'activeCount'>
   readonly health: Record<string, Health>
   readonly machine: Machine
   readonly masterId: string
+  readonly assistantId?: string
   /** Resolves once startup finishes or setup determines what is still missing. */
   readonly ready: Promise<void>
   /** Resolved deployment; throws if read while waiting for setup (`!configured()`). */
@@ -106,7 +108,8 @@ export function stateView(runtime: HttpHost) {
   const settings = runtime.store.settings()
   return { setup: setupView(runtime), load: { ...executorLoad(runtime.store, runtime.executor.activeCount()),
     maxWorkers: settings.executor.maxWorkers },
-    masterId: runtime.masterId, paused: settings.paused, health: runtime.health }
+      masterId: runtime.masterId, ...(runtime.assistantId ? { assistantId: runtime.assistantId } : {}),
+      showRouter: runtime.store.get(KV.assistant.showRouter) ?? false, paused: settings.paused, health: runtime.health }
 }
 const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
@@ -154,6 +157,18 @@ function routes(runtime: HttpHost): Routes {
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
   return {
     'GET state': () => stateView(runtime),
+    'PUT assistant/display': async ({ body }) => {
+      const { show } = z.object({ show: z.boolean() }).strict().parse(await body())
+      store.set(KV.assistant.showRouter, show)
+      return { show }
+    },
+    'POST assistant/focus': async ({ body }) => {
+      const { ticket_id } = z.object({ ticket_id: z.string().min(1) }).strict().parse(await body())
+      ticket(ticket_id)
+      if (!runtime.assistantId || !runtime.sessions.focusWork) throw new RouteError(400, 'Project assistant is unavailable')
+      runtime.sessions.focusWork(ticket_id)
+      return { session_id: runtime.assistantId }
+    },
     'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
       executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem),
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
