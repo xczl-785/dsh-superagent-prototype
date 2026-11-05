@@ -5,6 +5,7 @@ import { Assistant } from '../src/app/assistant.ts'
 import { KV } from '../src/kv.ts'
 import { join } from 'node:path'
 import { Sessions } from '../src/app/sessions.ts'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 
 let host: Host | undefined
 afterEach(async () => { await host?.stop(); host = undefined })
@@ -80,7 +81,7 @@ it('persists a recovery checkpoint and makes current work queryable without trus
   expect(f.runtime.assistant.recovery()).toContain('current project assets')
   const reopened = new Store(join(f.directory, 'orchestrator.sqlite'))
   try {
-    const restored = new Assistant({ context: f.ctx, store: reopened, sessions: f.runtime.sessions,
+    const restored = new Assistant({ store: reopened,
       effects: f.runtime.effects, engine: () => f.runtime.engine, id: f.id, configured: () => true })
     expect(restored.recovery()).toContain('preserve format')
     expect(reopened.get(KV.assistant.checkpoint)).toContain('encoding')
@@ -189,7 +190,7 @@ it('keeps work links and operation receipts when the database is reopened', asyn
   const created = await f.create()
   const reopened = new Store(join(f.directory, 'orchestrator.sqlite'))
   try {
-    const restored = new Assistant({ context: f.ctx, store: reopened, sessions: f.runtime.sessions, effects: f.runtime.effects,
+    const restored = new Assistant({ store: reopened, effects: f.runtime.effects,
       engine: () => f.runtime.engine, id: f.id, configured: () => true })
     expect(restored.owns(String(created.ticket_id))).toBe(true)
     expect(restored.work()[0]?.ticket_id).toBe(created.ticket_id)
@@ -234,6 +235,18 @@ it('keeps the management interface available when session initialization fails',
   expect(state.status).toBe(200)
   expect(state.body.assistantId).toBeUndefined()
   expect(state.body.assistant).toMatchObject({ state: 'failed', detail: 'Model configuration failed' })
+})
+
+it('does not duplicate assistant bindings and releases its tools through the common session lifecycle', async () => {
+  const f = await fixture()
+  const agent = f.ctx.agents.get(f.id as SessionId)!
+  const register = vi.spyOn(agent.ctx.tools, 'register')
+  const before = [...f.tools.get(f.id)!.keys()]
+  await f.runtime.sessions.ensure(f.id, f.directory, 'Project assistant', 'assistant')
+  expect(register).not.toHaveBeenCalled()
+  expect([...f.tools.get(f.id)!.keys()]).toEqual(before)
+  f.runtime.sessions.dispose()
+  expect(f.tools.get(f.id)!.size).toBe(0)
 })
 
 it('returns executor failures as well as explicit worker reports to the assistant', async () => {

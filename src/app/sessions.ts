@@ -1,7 +1,7 @@
 /** Lifecycle, prompt/tool/skill decoration, message delivery, and budget retry tracking for orchestrator and worker DSH sessions. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { MessageId } from '@deepseek-ai/dsh-llm'
+import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { dirname } from 'node:path'
@@ -18,6 +18,7 @@ import { bundledSkills } from './skill-files.ts'
 import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
+import { transcriptEntry } from './context.ts'
 import type { RegisterTool, Tool } from './tools/tool.ts'
 
 /** Host dependencies used by `Sessions`. */
@@ -30,7 +31,7 @@ export interface SessionsHost {
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
   readonly health: HealthEntry
   readonly masterId: string
-  readonly assistant?: { id: string; prompt(): string; tools(agent: Agent): Tool[]; owns(ticketId: string): boolean }
+  readonly assistant?: { id: string; prompt(): string; tools(agent: Agent): Tool[]; owns(ticketId: string): boolean; observe(sessionId: string, message: UserMessage): void }
   readonly lifetime: AbortSignal
   closing(): boolean
   /** Execution environment variables for `ticket`, rendered into its worker's system prompt. */
@@ -47,6 +48,14 @@ interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: 
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
 export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
+type SessionRole = 'orchestrator' | 'worker' | 'assistant'
+const ROLES = {
+  orchestrator: { preset: ROUTER_PRESET, model: 'eval' },
+  worker: { preset: WORKER_PRESET, model: 'executor' },
+  assistant: { preset: 'standard', model: 'eval' },
+} as const
+const ASSISTANT_TOOLS = ['read', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'write', 'edit', 'skill', 'job_output', 'job_list', 'job_kill']
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /** DSH's agent preset registry selected `agentPreset` for a Session. */
@@ -114,6 +123,7 @@ export class Sessions {
       this.retryHealth.clear(agent.id); this.updateModelHealth()
     })
     ctx.on('session/event', (session, event) => {
+      if (event.type === 'user/message') this.host.assistant?.observe(session.id, event.data)
       const agent = ctx.agents.get(session.id)
       const binding = agent && agent.session === session ? this.bindings.get(agent) : undefined
       if (!agent || !binding || binding.subagent) return
@@ -125,8 +135,9 @@ export class Sessions {
     // its first turn DSH refuses any selection, which leaves it as it is.
     ctx.inject(['agentPresets'], child => {
       child.on('agent-preset/selected', (sessionId, preset) => {
-        const ticketId = ticketOfSession(sessionId), agent = ctx.agents.get(sessionId as SessionId)
-        const ours = sessionId === this.host.assistant?.id ? 'standard' : sessionId === this.host.masterId ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
+        const agent = ctx.agents.get(sessionId as SessionId)
+        const role = this.roleOf(sessionId)
+        const ours = role && ROLES[role].preset
         if (!ours || preset === ours || !agent) return
         const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
         presets.select(agent, ours).catch(() => {})
@@ -137,24 +148,48 @@ export class Sessions {
     })
   }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
-  async ensure(id: string, cwd: string, title: string, role: 'orchestrator' | 'worker' | 'assistant'): Promise<Agent> {
+  async ensure(id: string, cwd: string, title: string, role: SessionRole): Promise<Agent> {
     const ctx = this.ctx
     let result = await ctx.sessionController.resolveAgent(id as SessionId)
     if ('error' in result && result.error.code === 'session/not-found') {
       const workspace = await ctx.workspaceRegistry.create(cwd)
       // A Session keeps the preset it was created with, one of the bundle's own (cordis.patch.yml).
       await ctx.sessionController.create({ sessionId: id as SessionId, workspaceId: workspace.id,
-        agentPreset: role === 'assistant' ? 'standard' : role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
+        agentPreset: ROLES[role].preset })
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
     const settings = this.host.store.settings()
-    await initializeRoleModel(ctx, result.agent, role === 'worker' ? settings.executor.model : settings.eval.model)
+    await initializeRoleModel(ctx, result.agent, settings[ROLES[role].model].model)
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
     return result.agent
   }
+  async history(id: string, offset: number, limit: number, query = '') {
+    const { context } = this.host
+    await context.sessionPersistence.flush()
+    await using handle = await context.sessionPersistence.open(id as SessionId, 'read')
+    const items: { offset: number; event: unknown }[] = []
+    let cursor = offset
+    // Scan a bounded window per call; callers may continue even when a search page has no matches.
+    const end = offset + (query ? 512 : limit)
+    while (cursor < end && items.length < limit) {
+      const { events } = await handle.read(cursor, Math.min(end - cursor, limit))
+      if (!events.length) return { items, next_offset: null }
+      for (const event of events) {
+        if (event.type === 'user/message') this.host.assistant?.observe(id, event.data)
+        const entry = transcriptEntry(event)
+        const visible = entry && { ...entry, ...(event.type === 'user/message' ? { message_id: event.data.id,
+          source: event.data.source } : {}) }
+        if (visible && (!query || JSON.stringify(visible).toLowerCase().includes(query.toLowerCase()))) items.push({ offset: cursor, event: visible })
+        cursor++
+        if (items.length >= limit) break
+      }
+    }
+    return { items, next_offset: cursor }
+  }
+
   /** Returns whether `sessionId` already holds the message delivered under `requestId`, or `false` if the session does not exist. */
   async holds(sessionId: string, requestId: string): Promise<boolean> {
     const result = await this.ctx.sessionController.resolveAgent(sessionId as SessionId)
@@ -238,6 +273,12 @@ export class Sessions {
       ? { state: 'error', detail: retries.slice(0, 5).map(item => `${item.sessionId}: ${item.provider} is over its model budget; retried ${item.attempts} times, waiting since ${item.since}; the model and retry policy are unchanged`).join('; ') + (retries.length > 5 ? `; ${retries.length - 5} more Sessions` : ''), at: retries.at(-1)!.lastAt }
       : { state: 'ready', detail: 'No managed Session is waiting on a model budget retry' })
   }
+  private roleOf(sessionId: string): SessionRole | undefined {
+    if (sessionId === this.host.masterId) return 'orchestrator'
+    if (sessionId === this.host.assistant?.id) return 'assistant'
+    const ticketId = ticketOfSession(sessionId)
+    return ticketId && this.host.store.tickets.get(ticketId) ? 'worker' : undefined
+  }
   private ticketOf(agent: Agent): Ticket | undefined {
     const ticketId = ticketOfSession(agent.id)
     return ticketId === undefined ? undefined : this.host.store.tickets.get(ticketId)
@@ -245,43 +286,20 @@ export class Sessions {
   private async decorate(agent: Agent): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
-    if (agent.id === host.assistant?.id) {
-      const binding: SessionBinding = { disposers: [] }
-      this.bindings.set(agent, binding)
-      this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
-      if (agent.status === 'idle') this.retryHealth.clear(agent.id)
-      this.updateModelHealth()
-      binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-project-assistant', order: 9999, interpolate: false,
-        text: context => { this.promptFor(agent, context.signal !== undefined); return host.assistant!.prompt() } }))
-      const skills = agent.ctx.inject(['skills'], scope => {
-        binding.scope = scope
-        binding.skills = undefined
-        this.bindSkills(binding, host.prompts.current())
-      })
-      binding.disposers.push(() => { skills.dispose().catch((error: unknown) => {
-        this.ctx.logger.warn('dsh-superagent could not release assistant skills: %s', String(error))
-      }) })
-      await skills
-      if (this.bindings.get(agent) !== binding) return
-      const register = this.registerTool(agent, binding)
-      for (const tool of host.assistant.tools(agent)) register(tool.name, tool.description, tool.schema, tool.execute)
-      const parent = scopeParentOf(agent)
-      const allow = ['read', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'write', 'edit', 'skill', 'job_output', 'job_list', 'job_kill']
-        .filter(name => agent.ctx.tools.get(name, parent))
-      binding.disposers.push(agent.ctx.tools.restrict({ allow }))
-      return
-    }
-    const master = agent.id === host.masterId
-    const ticket = master ? undefined : this.ticketOf(agent)
-    if (!master && !ticket) { this.limitSubagent(agent); return }
+    const role = this.roleOf(agent.id)
+    if (!role) { this.limitSubagent(agent); return }
+    const master = role === 'orchestrator'
+    const assistant = role === 'assistant'
+    const ticket = role === 'worker' ? this.ticketOf(agent) : undefined
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
     this.updateModelHealth()
     // Disable variable interpolation so literal ${{ ... }} expressions in team prompts are preserved.
-    binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
+    binding.disposers.push(agent.ctx.systemPrompt.section({ name: assistant ? 'dsh-project-assistant' : 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
       const version = this.promptFor(agent, context.signal !== undefined)
+      if (assistant) return host.assistant!.prompt()
       const current = ticket && host.store.tickets.get(ticket.id)
       const composed = host.prompts.compose(version.config, master ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined)
       return `[dsh-superagent prompt revision ${version.revision}]\n${composed}\n${current ? mandateInstructions(current.mandate) : ''}`
@@ -297,10 +315,13 @@ export class Sessions {
     // Bail out if the agent was disposed while awaiting the skill scope.
     if (this.bindings.get(agent) !== binding) return
     const register = this.registerTool(agent, binding)
-    for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
+    for (const tool of assistant ? host.assistant!.tools(agent) : host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
       binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
+    } else if (assistant) {
+      const parent = scopeParentOf(agent)
+      binding.disposers.push(agent.ctx.tools.restrict({ allow: ASSISTANT_TOOLS.filter(name => agent.ctx.tools.get(name, parent)) }))
     } else {
       // An Executor Session keeps the profile's work tools it has, which DSH requires to be known; its own tools are not masked.
       binding.disposers.push(...this.workOnly(agent, ticket!.id))

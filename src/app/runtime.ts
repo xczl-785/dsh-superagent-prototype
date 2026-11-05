@@ -47,6 +47,7 @@ import type { MainResourceHost, ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
 import { Assistant } from './assistant.ts'
+import { assistantTools } from './tools/assistant.ts'
 import { readResource } from './resources.ts'
 import { readTool } from './tools/tool.ts'
 import { z } from 'zod'
@@ -128,15 +129,16 @@ export class Runtime extends Service implements SourceHost {
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
         assistant: { id: this.assistantId, prompt: () => this.assistant.recovery(), owns: id => this.assistant.owns(id),
+          observe: (id, message) => this.assistant.observe(id, message),
           tools: agent => {
             const projectResources: MainResourceHost = { ...resources, sessions: this.sessions, settings: this.settings }
             return [readTool('Read current project work and source facts. This read grants no execution authority.', false,
-              (resource, offset, limit, signal) => readResource(projectResources, resource, offset, limit, undefined, signal)), ...this.assistant.tools(agent)]
+              (resource, offset, limit, signal) => readResource(projectResources, resource, offset, limit, undefined, signal)), ...assistantTools(this.assistant, this.sessions, this.assistantId)]
           } },
         lifetime: this.lifetime,
         closing: () => this.closing(), environment,
         tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
-      this.assistant = new Assistant({ context: ctx, store, sessions, effects, engine: () => this.engine,
+      this.assistant = new Assistant({ store, effects, engine: () => this.engine,
         id: this.assistantId, configured: () => setup.configured() })
       sources.register({ kind: 'assistant', title: { zh: '项目助手', en: 'Project assistant' },
         description: { zh: '本地用户定向交接的工作。', en: 'Work explicitly handed off by the local user.' },
@@ -243,9 +245,6 @@ export class Runtime extends Service implements SourceHost {
       return
     }
     this.sessions.install()
-    this.ctx.on('session/event', (session, event) => {
-      if (event.type === 'user/message') this.assistant.observe(session.id, event.data)
-    })
     this.executor.install()
     await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
     await this.sessions.ensure(this.assistantId, this.machine.assistantWorkspace || this.machine.stateDir, '项目助手', 'assistant')

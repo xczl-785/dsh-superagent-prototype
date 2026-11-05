@@ -38,6 +38,8 @@ A01 已修正首次安装与状态表达：未提供 stateDir 时根据 Harness 
 
 实现入口：[Assistant](../../src/app/assistant.ts)、[Runtime](../../src/app/runtime.ts)、[Sessions](../../src/app/sessions.ts)、[executor tools](../../src/app/tools/executor.ts)。
 
+A03 已整理角色与助手接入：助手工具定义由 [assistant tools](../../src/app/tools/assistant.ts) 维护，交接业务保留在 Assistant；原始历史查询由 Sessions 适配 Harness 持久化。三个固定角色通过明确的预设与模型配置共用提示词、skill、工具装饰和释放流程，保留各角色既有权限与助手复用研判模型的约定。相关 112 项检查、类型检查与构建通过；没有改变会话恢复策略或持久化键格式。
+
 ## 上下文恢复与信息归属
 
 Harness 持久化原始会话。`assistant_history` 按事件位置分页或搜索可见交流，过滤推理块及内部流式事件，返回原始用户消息 id；读取历史时可补回用户来源记录。查询有窗口上限，继续使用 next_offset，不宣称一次读取覆盖全部历史。
