@@ -83,6 +83,8 @@ export interface TriggerContext {
 }
 /** Pluggable source kind descriptor registered with SourceRegistry. */
 export interface SourceKind<C extends Record<string, unknown> = Record<string, unknown>> {
+  /** Fixed host-owned identities; used by local ingress, never inferred from message text. */
+  authorizedSenders?: readonly { id: string; name?: string }[]
   /** Stable ID; a default instance with the same ID exists when none is stored. */
   kind: string
   title: Localized

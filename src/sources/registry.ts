@@ -1,5 +1,5 @@
 /** Registry of installed Source kinds, their configured instances, and the Engine's SourceScope implementation. */
-import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
+import type { ActorRef, ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
@@ -41,6 +41,9 @@ export class SourceRegistry implements SourceScope {
     return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
   }
   kind(id: string): SourceKind | undefined { return this.kinds.get(id) }
+  authorizedSender(actor: ActorRef): { id: string; name?: string } | undefined {
+    return this.kinds.get(actor.source)?.authorizedSenders?.find(sender => sender.id === actor.id)
+  }
   /** Every registered kind's instance ordered by ID, followed by stored instances whose kind is not installed (with their config kept as stored). */
   instances(settings = this.settings()): (SourceInstance & { installed: boolean })[] {
     const installed = [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(kind => ({ ...this.resolve(kind, settings.sources[kind.kind]), installed: true }))

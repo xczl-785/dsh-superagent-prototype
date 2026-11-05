@@ -31,7 +31,7 @@ export interface SessionsHost {
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
   readonly health: HealthEntry
   readonly masterId: string
-  readonly assistant?: { id: string; prompt(): string; tools(agent: Agent): Tool[]; owns(ticketId: string): boolean; observe(sessionId: string, message: UserMessage): void }
+  readonly assistant?: { id: string; prompt(): string; tools(agent: Agent): Tool[]; observe(sessionId: string, message: UserMessage): void }
   readonly lifetime: AbortSignal
   closing(): boolean
   /** Execution environment variables for `ticket`, rendered into its worker's system prompt. */
@@ -205,9 +205,8 @@ export class Sessions {
   /** The id of the message `prompt` delivers under `requestId`, which DSH's inbox events name it by. */
   promptedId(requestId: string): MessageId { return messageId(key(requestId)) }
   /** Enqueues a steering relay to the main Session; relays are durable and retried by `Effects` until delivered, at most once per `requestId`. */
-  relay(requestId: string, text: string, ticketId?: string): void {
-    const assistant = ticketId && this.host.assistant?.owns(ticketId)
-    this.host.effects.enqueue(assistant ? 'assistant-relay' : 'relay', requestId, { text })
+  relay(requestId: string, text: string): void {
+    this.host.effects.enqueue('relay', requestId, { text })
   }
   /** Enqueues a durable background notice for injection into the main Session; a new notice with the same `name` replaces a still-waiting notice of that `name`. */
   notify(name: string, value: Record<string, unknown>, summary: string): void { this.host.effects.enqueue('notice', name, { value, summary }) }

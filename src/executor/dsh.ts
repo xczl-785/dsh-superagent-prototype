@@ -1,4 +1,5 @@
 /** DSH executor: manages one persistent worker session and workspace directory per ticket. */
+import type { AssistantFeedback } from '../app/assistant-feedback.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -69,8 +70,9 @@ export interface ExecutorHost {
   readonly health: HealthEntry
   readonly machine: Pick<Machine, 'stateDir'>
   readonly lifetime: AbortSignal
-  /** Session manager for worker sessions and for relaying worker reports to the main Session. */
-  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
+  /** Session manager for worker creation and message delivery. */
+  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'holds'>
+  readonly feedback: Pick<AssistantFeedback, 'report'>
   closing(): boolean
   /** Whether processing is paused, which holds launches and input deliveries. */
   paused(): boolean
@@ -417,10 +419,9 @@ export class DshExecutor implements Executor {
   private failed(ticketId: string, summary: string): void {
     this.host.store.atomic(() => {
       const updated = this.host.engine.report(ticketId, { state: 'failed', summary })
-      this.relay(resultRelay(updated, 'failed', summary), ticketId)
+      this.host.feedback.report(ticketId, resultRelay(updated, 'failed', summary))
     })
   }
-  private relay({ id, text }: { id: string; text: string }, ticketId: string): void { this.host.sessions.relay(id, text, ticketId) }
   private async launch(ticket: Ticket, assignment: Assignment): Promise<void> {
     const current = () => {
       if (this.host.closing()) throw new Error('dsh-superagent is stopping')
@@ -664,9 +665,9 @@ export class DshExecutor implements Executor {
       const before = latestReport(current)?.summary ?? ''
       const updated = this.host.engine.report(ticket.id, { state: 'waiting', summary: said || before })
       // A quiet final after orchestrator_report is not a new status or an empty handoff.
-      if (said) this.relay(resultRelay(updated, 'waiting', said), ticket.id)
+      if (said) this.host.feedback.report(ticket.id, resultRelay(updated, 'waiting', said))
       else if (!before.trim()) {
-        this.relay(resultRelay(updated, 'waiting', 'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.'), ticket.id)
+        this.host.feedback.report(ticket.id, resultRelay(updated, 'waiting', 'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.'))
       }
     })
   }

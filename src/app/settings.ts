@@ -176,6 +176,7 @@ export class Settings {
     const restarting = setupChanged(old, settings) || !this.host.setup.configured()
     const before = policyVersion(old), after = policyVersion(settings)
     const scope = (version: SettingsValue) => ({
+      authorizedSender: (actor: Parameters<SourceRegistry['authorizedSender']>[0]) => this.host.sources.authorizedSender(actor),
       scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
     const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope)
     const notified = [...effects.keys()]

@@ -50,7 +50,8 @@ import { Assistant } from './assistant.ts'
 import { assistantTools } from './tools/assistant.ts'
 import { readResource } from './resources.ts'
 import { readTool } from './tools/tool.ts'
-import { z } from 'zod'
+import { AssistantSource } from '../sources/assistant.ts'
+import { AssistantFeedback } from './assistant-feedback.ts'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -80,6 +81,8 @@ export class Runtime extends Service implements SourceHost {
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
   readonly masterId: string
   readonly assistantId: string
+  readonly assistantSource: AssistantSource
+  readonly assistantFeedback: AssistantFeedback
   readonly assistant: Assistant
   assistantStatus: NonNullable<HttpHost['assistantStatus']> = { state: 'starting' }
   private readonly sourceLinks = new TextCache(200_000)
@@ -115,6 +118,8 @@ export class Runtime extends Service implements SourceHost {
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
       const board = this.board
       const effects = this.effects = new Effects(store, board)
+      const assistantSource = this.assistantSource = new AssistantSource(store, this.assistantId)
+      const feedback = this.assistantFeedback = new AssistantFeedback(store, effects, this.assistantId)
       const sources = this.sources = new SourceRegistry(() => store.settings(), board, kind => {
         // Sync source member lists once startup completes when a source plugin loads dynamically.
         if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
@@ -128,8 +133,8 @@ export class Runtime extends Service implements SourceHost {
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
-        assistant: { id: this.assistantId, prompt: () => this.assistant.recovery(), owns: id => this.assistant.owns(id),
-          observe: (id, message) => this.assistant.observe(id, message),
+        assistant: { id: this.assistantId, prompt: () => this.assistant.recovery(),
+          observe: (id, message) => assistantSource.observe(id, message),
           tools: agent => {
             const projectResources: MainResourceHost = { ...resources, sessions: this.sessions, settings: this.settings }
             return [readTool('Read current project work and source facts. This read grants no execution authority.', false,
@@ -138,26 +143,13 @@ export class Runtime extends Service implements SourceHost {
         lifetime: this.lifetime,
         closing: () => this.closing(), environment,
         tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
-      this.assistant = new Assistant({ store, effects, engine: () => this.engine,
+      this.assistant = new Assistant({ store, source: assistantSource, feedback, engine: () => this.engine,
         id: this.assistantId, configured: () => setup.configured() })
-      sources.register({ kind: 'assistant', title: { zh: '项目助手', en: 'Project assistant' },
-        description: { zh: '本地用户定向交接的工作。', en: 'Work explicitly handed off by the local user.' },
-        schema: z.object({}), fields: [], health: [],
-        scope: ({ meta }) => meta.session_id === this.assistantId ? { listened: true, observed: false }
-          : { listened: false, reason: 'source_disabled' },
-        channel: {
-          send: async (_host, message) => {
-            effects.enqueue('assistant-relay', `channel:${message.id}`, { text: JSON.stringify({ kind: 'worker_reply',
-              ticket_id: message.ticketId, text: message.text, purpose: message.kind }) })
-            return 'sent'
-          },
-          link: () => ({ url: '', label: { zh: '项目助手', en: 'Project assistant' } }),
-        },
-      })
+      sources.register(assistantSource.kind(message => feedback.reply(message)))
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
+      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, feedback, health: board.claim('worker'), machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
         repliedTo: trigger => repliedTo({ store, sources }, trigger) })
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
@@ -168,9 +160,9 @@ export class Runtime extends Service implements SourceHost {
       const policy = () => settingsPolicy(store.settings(), sources)
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
         outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
-          this.assistant.event(event)
+          feedback.event(event)
           // Notify the main Session only about domain events it did not initiate itself.
-          const local = 'ticketId' in event.data && this.assistant.owns(event.data.ticketId)
+          const local = 'ticketId' in event.data && feedback.linked(event.data.ticketId)
           const notice = this.quiet || local ? undefined : eventNotice(event, id => store.tickets.get(id))
           if (notice) sessions.notify(...notice)
           // A person's message that reached an open ticket is the ticket's; the main Session hears of it in the same transaction,
@@ -193,7 +185,7 @@ export class Runtime extends Service implements SourceHost {
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
+      this.toolHost = { context: ctx, engine, feedback, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }

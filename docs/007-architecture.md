@@ -182,7 +182,7 @@ Each kind has a health entry under its name. It reports an error once one of its
 
 ### Sources
 
-Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `find`, `policy`, `environment` and `refreshLabels`.
+Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `find`, `policy`, `environment`, `refreshLabels` and fixed host-owned `authorizedSenders`. The local assistant adapter declares its trusted identity; external sources continue to use policy membership lists.
 
 `SourceRegistry` (`registry.ts`) owns registered kinds and stored instances, and implements the Engine's `SourceScope`. Registration claims health entries on `HealthBoard`; duplicate claims and reserved `sync:` names are refused. A SourceContext writes only through its registration's claimed entries, so reports after unregistration do nothing.
 
@@ -232,7 +232,7 @@ Validation inherits an omitted base from the saved override, drops removed parts
 
 ### Sessions
 
-`Sessions` (`src/app/sessions.ts`) manages DeepSeek Harness Sessions for both roles. `ensure` creates a Session with its role's model. `install` follows agent events and registers prompts, skills and tools for managed Sessions.
+`Sessions` (`src/app/sessions.ts`) manages DeepSeek Harness Sessions for the three fixed roles: orchestrator, worker and project assistant. `ensure` creates a Session with its role's model. `install` follows agent events and registers prompts, skills and tools for managed Sessions.
 
 `prompt` delivers once per request id. `relay` and `notify` enqueue main-Session messages handled by the `relay` and `notice` effects. `src/app/notices.ts` defines their content; `delivery` checks whether a message arrived.
 
@@ -334,7 +334,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/retry-health.ts` | `RetryHealth`: which Sessions wait on a model budget retry, for the `models` health entry |
 | `src/app/role-models.ts` | Resolves the Eval and Executor models, and seeds a new Session with its role's model |
 | `src/app/assessment.ts` | The MasterAssessor, the assessment schema and the window `orchestrator_eval` answers |
-| `src/app/assistant.ts` | Local project collaboration, authentic user references, explicit work handoffs, feedback links and discussion recovery |
+| `src/app/assistant.ts` | Explicit work handoffs, directed operations and discussion recovery |
+| `src/app/assistant-feedback.ts` | Sole writer of local work return links and selector of worker feedback targets; queues reports and local channel replies |
 | `src/app/execution-environment.ts` | The execution environment: its variables, a Ticket's values, the directory root and the lines of the prompt section, which `src/app/prompts.ts` fills into its template |
 | `src/app/source-context.ts` | `sourceContextOf`: each Source kind's `SourceContext` |
 | `src/app/links.ts` | `sourceLink`, the page of a Trigger's message, and `candidateCard` |
@@ -362,6 +363,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry` |
+| `src/sources/assistant.ts` | Authentic local user receipts, Trigger conversion and local SourceKind/channel descriptor |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
 | `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |

@@ -1,11 +1,15 @@
+import { AssistantSource } from '../src/sources/assistant.ts'
+import { AssistantFeedback } from '../src/app/assistant-feedback.ts'
 import { afterEach, expect, it, vi } from 'vitest'
-import { startRuntime, type Host } from './fixtures/host.ts'
+import { feishu, startRuntime, type Host } from './fixtures/host.ts'
 import { Store } from '../src/app/store.ts'
 import { Assistant } from '../src/app/assistant.ts'
 import { KV } from '../src/kv.ts'
 import { join } from 'node:path'
 import { Sessions } from '../src/app/sessions.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { settingsPolicy } from '../src/policy.ts'
+import { SourceRegistry } from '../src/sources/registry.ts'
 
 let host: Host | undefined
 afterEach(async () => { await host?.stop(); host = undefined })
@@ -82,7 +86,7 @@ it('persists a recovery checkpoint and makes current work queryable without trus
   const reopened = new Store(join(f.directory, 'orchestrator.sqlite'))
   try {
     const restored = new Assistant({ store: reopened,
-      effects: f.runtime.effects, engine: () => f.runtime.engine, id: f.id, configured: () => true })
+      source: new AssistantSource(reopened, f.id), feedback: new AssistantFeedback(reopened, f.runtime.effects, f.id), engine: () => f.runtime.engine, id: f.id, configured: () => true })
     expect(restored.recovery()).toContain('preserve format')
     expect(reopened.get(KV.assistant.checkpoint)).toContain('encoding')
   } finally { reopened.close() }
@@ -190,9 +194,9 @@ it('keeps work links and operation receipts when the database is reopened', asyn
   const created = await f.create()
   const reopened = new Store(join(f.directory, 'orchestrator.sqlite'))
   try {
-    const restored = new Assistant({ store: reopened, effects: f.runtime.effects,
+    const restored = new Assistant({ store: reopened, source: new AssistantSource(reopened, f.id), feedback: new AssistantFeedback(reopened, f.runtime.effects, f.id),
       engine: () => f.runtime.engine, id: f.id, configured: () => true })
-    expect(restored.owns(String(created.ticket_id))).toBe(true)
+    expect(restored.linked(String(created.ticket_id))).toBe(true)
     expect(restored.work()[0]?.ticket_id).toBe(created.ticket_id)
     expect(reopened.keys(KV.assistant.operation)).toHaveLength(1)
   } finally { reopened.close() }
@@ -249,6 +253,17 @@ it('does not duplicate assistant bindings and releases its tools through the com
   expect(f.tools.get(f.id)!.size).toBe(0)
 })
 
+it('does not grant local-user authority without its registered local source adapter', async () => {
+  const f = await fixture()
+  f.message('u1', 'Fix export')
+  const created = await f.create()
+  const ticket = f.runtime.store.tickets.get(String(created.ticket_id))!
+  const trigger = f.runtime.store.triggers.get(ticket.origin.triggerId)!
+  const settings = f.runtime.store.settings()
+  const policy = settingsPolicy(settings, new SourceRegistry(() => settings))
+  expect(policy.gate(trigger, { subscriptions: [] } as never, []).admissible).toBe(false)
+})
+
 it('returns executor failures as well as explicit worker reports to the assistant', async () => {
   const f = await fixture()
   f.message('u1', 'Fix export')
@@ -259,4 +274,57 @@ it('returns executor failures as well as explicit worker reports to the assistan
     expect(f.relays(f.id).some(item => item.kind === 'worker_report' && item.state === 'failed')).toBe(true)
   })
   expect(f.relays(f.runtime.masterId).some(item => item.kind === 'worker_report')).toBe(false)
+})
+
+it('retains local return links when the router accepts work handed back by a worker', async () => {
+  const f = await fixture()
+  f.message('u1', 'Fix export')
+  const first = await f.create(), ticketId = String(first.ticket_id)
+  await f.runtime.idle()
+  expect(f.runtime.store.get(KV.assistant.work(ticketId))?.context).toBe('The user confirmed a small export change.')
+  f.message('u2', 'Also fix the import dialog as separate work')
+  await f.runTool(f.id, 'assistant_update_work', { message_id: 'u2', request_id: 'import', ticket_id: ticketId,
+    context: 'A separate import dialog fix.' })
+  await f.runtime.idle()
+  const input = f.runtime.store.tickets.get(ticketId)!.inputs.find(item => item.kind === 'trigger')!
+  if (input.kind !== 'trigger') throw new Error('Expected the directed user input')
+  await f.runTool(`worker-${ticketId}`, 'orchestrator_trigger_handback', { trigger_id: input.triggerId, reason: 'Separate work' })
+  const second = await f.acceptedTicket(f.runtime.store.triggers.get(input.triggerId)!)
+  expect(f.runtime.assistantFeedback.linked(second.ticket.id)).toBe(true)
+  expect(f.runtime.store.get(KV.assistant.work(second.ticket.id))).toMatchObject({
+    sessionId: f.id, messageId: 'u2', context: 'A separate import dialog fix.',
+  })
+  const reported = await f.runTool(second.sessionId, 'orchestrator_report', { state: 'ready', summary: 'Import fixed' })
+  expect(reported.notification).toBe('assistant')
+  await f.runtime.idle()
+  expect(f.relays(f.id).some(item => item.summary === 'Import fixed')).toBe(true)
+  expect(f.relays(f.runtime.masterId).some(item => item.summary === 'Import fixed')).toBe(false)
+})
+
+it('keeps external work feedback on the router after the assistant reads its reference', async () => {
+  const f = await fixture()
+  const external = await f.acceptedTicket(feishu('1', '@bot Fix external export'))
+  await f.api('POST', 'assistant/focus', { ticket_id: external.ticket.id })
+  await f.runtime.idle()
+  f.deliveries.mockClear()
+  const reported = await f.runTool(external.sessionId, 'orchestrator_report', { state: 'ready', summary: 'External export fixed' })
+  expect(reported.notification).toBe('orchestrator')
+  await f.runtime.idle()
+  expect(f.runtime.assistantFeedback.linked(external.ticket.id)).toBe(false)
+  expect(f.relays(f.runtime.masterId).some(item => item.summary === 'External export fixed')).toBe(true)
+  expect(f.relays(f.id)).toEqual([])
+})
+
+it('preserves local authorization during policy changes and revokes it when its source is disabled', async () => {
+  const f = await fixture()
+  f.message('u1', 'Fix export')
+  const created = await f.create(), ticketId = String(created.ticket_id)
+  await f.runtime.idle()
+  const policy = f.runtime.store.settings().policy
+  await f.runtime.settings.save('policy', { ...policy, rules: policy.rules.map((rule, i) => i ? rule : { ...rule, instruction: `${rule.instruction}\nKeep output compatible.` }) },
+    f.runtime.store.blockRevision('policy'), 'panel')
+  expect(settingsPolicy(f.runtime.store.settings(), f.runtime.sources).revalidate(f.runtime.store.tickets.get(ticketId)!.mandate)).toBe(true)
+  await f.runtime.settings.save('source:assistant', { enabled: false, config: {} },
+    f.runtime.store.blockRevision('source:assistant'), 'panel')
+  expect(settingsPolicy(f.runtime.store.settings(), f.runtime.sources).revalidate(f.runtime.store.tickets.get(ticketId)!.mandate)).toBe(false)
 })

@@ -7,13 +7,15 @@ import type { SourceContext } from '../../sources/host.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
+import type { AssistantFeedback } from '../assistant-feedback.ts'
 import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
 export interface ExecutorToolsHost {
   readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
   readonly store: Pick<Store, 'tickets' | 'replyStatus' | 'atomic'>
-  readonly sessions: Pick<Sessions, 'relay' | 'notify'>
+  readonly sessions: Pick<Sessions, 'notify'>
+  readonly feedback: Pick<AssistantFeedback, 'report' | 'target'>
   readonly resources: ResourceHost
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
@@ -95,8 +97,8 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
             ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
           const updated = host.engine.report(ticketId, report)
           const relay = reportRelay(updated, report)
-          if (relay) host.sessions.relay(relay.id, relay.text, ticketId)
-          const notification = relay ? (ticket.mandate.actor.source === 'assistant' ? 'assistant' : 'orchestrator') : 'internal_only'
+          if (relay) host.feedback.report(ticketId, relay)
+          const notification = relay ? host.feedback.target(ticketId) : 'internal_only'
           return { reported: true, notification, ...(updated.attention ? { attention: updated.attention } : {}) }
         })
       },
