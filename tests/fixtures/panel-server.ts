@@ -85,6 +85,7 @@ export const MACHINE = { stateDir: '/srv/dsh-superagent', promptMaxChars: 100000
 
 type Settings = ReturnType<typeof SettingsSchema.parse>
 export interface PanelServer {
+  assistantStatus?: StateView['assistant']
   showRouter: boolean
   joined?: Record<string, string>; joining?: Record<string, string>
   joinError?: string
@@ -160,7 +161,8 @@ function sourceStatuses(): SourceStatusRow[] {
 }
 const stateView = (): StateView => ({
   setup: server.setup, load: { running: server.setup.problem ? 0 : 2, queued: 0, maxWorkers: server.settings.executor.maxWorkers },
-    masterId: 'master', assistantId: 'assistant-test', showRouter: server.showRouter, paused: server.settings.paused,
+    masterId: 'master', assistantId: server.assistantStatus && server.assistantStatus.state !== 'ready' ? undefined : 'assistant-test',
+    assistant: server.assistantStatus, showRouter: server.showRouter, paused: server.settings.paused,
   // The panel does not read health; the service script does.
   health: {},
 })

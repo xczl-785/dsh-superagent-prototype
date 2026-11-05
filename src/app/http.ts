@@ -30,6 +30,7 @@ import { decisionList, search, threadDetail, threadList } from './views/threads.
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 
 export interface HttpHost {
+  readonly assistantStatus?: { state: 'starting' | 'setup-required' | 'ready' | 'failed'; detail?: string }
   readonly store: Store
   /** Feishu message links resolved since startup, used by search to match AppLink URLs. */
   readonly sourceLinks: Pick<TextCache, 'entries'>
@@ -108,7 +109,9 @@ export function stateView(runtime: HttpHost) {
   const settings = runtime.store.settings()
   return { setup: setupView(runtime), load: { ...executorLoad(runtime.store, runtime.executor.activeCount()),
     maxWorkers: settings.executor.maxWorkers },
-      masterId: runtime.masterId, ...(runtime.assistantId ? { assistantId: runtime.assistantId } : {}),
+      masterId: runtime.masterId,
+      ...(runtime.assistantStatus ? { assistant: runtime.assistantStatus } : {}),
+      ...(runtime.assistantId && (!runtime.assistantStatus || runtime.assistantStatus.state === 'ready') ? { assistantId: runtime.assistantId } : {}),
       showRouter: runtime.store.get(KV.assistant.showRouter) ?? false, paused: settings.paused, health: runtime.health }
 }
 const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
@@ -165,7 +168,9 @@ function routes(runtime: HttpHost): Routes {
     'POST assistant/focus': async ({ body }) => {
       const { ticket_id } = z.object({ ticket_id: z.string().min(1) }).strict().parse(await body())
       ticket(ticket_id)
-      if (!runtime.assistantId || !runtime.sessions.focusWork) throw new RouteError(400, 'Project assistant is unavailable')
+      if (!runtime.assistantId || !runtime.sessions.focusWork || (runtime.assistantStatus && runtime.assistantStatus.state !== 'ready')) {
+        throw new RouteError(400, runtime.assistantStatus?.detail || 'Project assistant is not ready; complete setup first')
+      }
       runtime.sessions.focusWork(ticket_id)
       return { session_id: runtime.assistantId }
     },
@@ -251,7 +256,8 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
       if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }
       if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
       try {
-        await runtime.ready
+        // Read startup facts while setup or session creation is still in flight; mutations wait for initialization.
+        if (req.method !== 'GET' || url.pathname !== '/orchestrator/api/state') await runtime.ready
         const route = match(table, req.method ?? 'GET', url.pathname.slice('/orchestrator/api/'.length).split('/'))
         if (!route) throw new RouteError(404, 'Unknown operation')
         const query = Object.fromEntries(url.searchParams)

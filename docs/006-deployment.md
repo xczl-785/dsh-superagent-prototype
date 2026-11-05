@@ -92,7 +92,7 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |
+| `stateDir` | no, with profile metadata | Absolute path: the database, lock, shims and Ticket directories. Empty uses `state/dsh-superagent` beside the active profile's `cordis.patch.yml`. Hosts without profile metadata must supply it. Explicit paths keep their existing data location. Back it up before upgrades |
 | `assistantWorkspace` | no | Absolute local checkout path for the project assistant; empty uses stateDir and requires explicitly fetching repository evidence. Set before first assistant creation; changing this non-volatile option reloads the plugin but does not move an existing DSH Session |
 | `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
 
@@ -110,6 +110,12 @@ assistantWorkspace: 'D:/Program/dsh-superagent-prototype'
 ```
 
 This change adapts path configuration and comparison, not the complete Windows execution toolchain. Existing account probes and worker shims still use `env`/`sh`; their availability and behavior in a real Windows Harness deployment have not been verified. GitHub setup requirements are unchanged. A configured absolute CLI file path may include spaces; a relative path such as `tools\gh.exe` is not a command name and is rejected.
+
+### Desktop first installation
+
+In the desktop Plugin Manager, install the built local plugin directory. A new profile uses its own default state directory; it does not need a manual patch just to enable the bundle. An existing explicit `stateDir` remains in effect. The Deployment page displays the effective directory.
+
+Open Superagent and configure the GitHub repository and agent CLI in Sources. Until setup and managed Session creation complete, the project assistant and work-reference actions remain unavailable, with setup, starting or failure status shown. Startup failures are listed in Overview. The assistant still requires GitHub setup; installing the bundle alone does not create a usable assistant Session.
 
 ## Start and stop
 

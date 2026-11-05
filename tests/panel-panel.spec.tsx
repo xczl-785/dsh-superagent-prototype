@@ -7,6 +7,15 @@ import { usePanel, mount, remount, settle, all, click, type, text, field } from 
 import { server, found } from './fixtures/panel-server.ts'
 
 usePanel()
+it('explains setup requirements and disables an unavailable assistant without attempting navigation', async () => {
+  server.assistantStatus = { state: 'setup-required', detail: 'GitHub repository is not configured' }
+  await mount()
+  const button = all('button').find(button => button.textContent === zh.projectAssistant) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+  expect(text()).toContain(zh.assistantSetupRequired)
+  await click(button)
+  expect(server.opened).toEqual([])
+})
 it('opens the assistant and makes the background router entry opt-in without changing execution', async () => {
   await mount()
   expect(all('button').some(button => button.textContent === zh.backgroundRouter)).toBe(false)

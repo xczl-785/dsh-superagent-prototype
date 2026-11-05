@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { Config, type Machine } from '../src/deployment.ts'
 import { apply } from '../src/index.ts'
+import { join, dirname } from 'node:path'
 
 // Stub Runtime to capture the resolved Machine settings and restart callback.
 const runtimes = vi.hoisted(() => [] as { machine: Machine; restart: () => void }[])
@@ -22,11 +23,17 @@ function context() {
     inject: vi.fn((_services: string[], callback: (child: unknown) => void) => { callback({ effect: (effect: () => unknown) => effect(), settings: { configure } }) }),
     effect: vi.fn(),
     fiber: { restart: vi.fn(async () => {}) },
-    get: vi.fn((name: string) => name === 'settings' ? { describe } : undefined),
+    get: vi.fn((name: string) => name === 'settings' ? { describe, documentPath: join(process.cwd(), 'test-profile', 'cordis.patch.yml') } : undefined),
     logger: { info: vi.fn(), error: vi.fn() },
   }
   return { ctx, handlers, configure, describe }
 }
+
+it('starts a first installation with a profile-scoped state directory when no directory was supplied', async () => {
+  const { ctx } = context()
+  await apply(ctx as never, Config({}))
+  expect(runtimes.at(-1)!.machine.stateDir).toBe(join(dirname(ctx.get('settings')!.documentPath), 'state', 'dsh-superagent'))
+})
 
 it('reads a limit DSH commits a new value of without a restart, and asks DSH to generate no settings page', async () => {
   const { ctx, handlers, configure } = context()

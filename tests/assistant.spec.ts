@@ -4,6 +4,7 @@ import { Store } from '../src/app/store.ts'
 import { Assistant } from '../src/app/assistant.ts'
 import { KV } from '../src/kv.ts'
 import { join } from 'node:path'
+import { Sessions } from '../src/app/sessions.ts'
 
 let host: Host | undefined
 afterEach(async () => { await host?.stop(); host = undefined })
@@ -213,6 +214,26 @@ it('queries the same domain resources as the management panel', async () => {
   expect(JSON.stringify(list)).toContain(String(created.ticket_id))
   const detail = await f.runTool(f.id, 'orchestrator_read', { resource: `ticket/${created.ticket_id}` })
   expect(JSON.stringify(detail)).toContain('Fix export')
+})
+
+it('does not advertise an assistant session or accept focus requests while GitHub setup is incomplete', async () => {
+  host = await startRuntime(store => {
+    const settings = store.settings()
+    store.saveSettings({ ...settings, sources: { ...settings.sources, github: { enabled: true, config: {} } } })
+  })
+  const state = await host.api('GET', 'state')
+  expect(state.body.assistantId).toBeUndefined()
+  expect(state.body.assistant).toMatchObject({ state: 'setup-required' })
+  expect(host.agents.has(host.runtime.assistantId)).toBe(false)
+})
+
+it('keeps the management interface available when session initialization fails', async () => {
+  vi.spyOn(Sessions.prototype, 'ensure').mockRejectedValueOnce(new Error('Model configuration failed'))
+  host = await startRuntime()
+  const state = await host.api('GET', 'state')
+  expect(state.status).toBe(200)
+  expect(state.body.assistantId).toBeUndefined()
+  expect(state.body.assistant).toMatchObject({ state: 'failed', detail: 'Model configuration failed' })
 })
 
 it('returns executor failures as well as explicit worker reports to the assistant', async () => {

@@ -9,6 +9,8 @@
 | 读者当前要做什么 | 阅读归属 |
 | --- | --- |
 | 使用原型、了解实际接入、工具与验证限制 | [prototype.md](prototype.md) |
+| 查看独立需求、工作量粗估及排期状态 | [task-board.md](task-board.md) |
+| 审阅推荐下一批需求的渐进式实施计划 | [next-batch-plan.md](next-batch-plan.md) |
 | 理解这个 agent 的目标、能力、自主性、活跃方式和职责边界 | [design-focus.md](design-focus.md) |
 | 区分项目资产、助手记忆和原始对话；理解沉淀/获取时机与已有基础 | [foundations.md](foundations.md) |
 | 继续讨论助手记忆的写入、使用、修正、忘记和可选回顾 skill | [assistant-memory.md](assistant-memory.md) |
@@ -40,8 +42,9 @@
 
 - 目标和职责已对齐；2026-11-03 的概念走查保存在 interaction-proposals.md，不等于运行验证。
 - 2026-11-05 启动首个真实实现增量，继续复用 Ticket、Assignment、Engine、现有面板和持久化投递，不新增 Feature 或执行调度系统。
-- 本轮采用用户已验证的 DSH SS 契约进行模拟集成测试。没有 GitHub 账号与仓库用于联调，不接管桌面；交付可安装版本，不安装到现有 Harness。
+- 实现阶段采用用户已验证的 DSH SS 契约进行模拟集成测试，不接管桌面。随后用户安装了桌面插件，已恢复客户端并补入目录配置；当前缺少 GitHub 配置，助手对话及执行闭环尚未实际试用。
 - 当前具体实现、使用入口、检查证据与未验证范围统一见 prototype.md。个人偏好记忆及 RouteLedger/文档工作流内部改造继续留到后续适用增量。
+- 后续按独立需求推进；候选与粗估维护在 task-board.md，已接受的 A01、A03、A04 分阶段计划在 next-batch-plan.md，逐项交付。保留配置 GitHub 后再使用助手的前提。
 
 后续讨论保持目标和能力边界，以使用走查发现信息不可达、能力缺失和职责冲突，不编排 agent 的常规判断与对话步骤。多助手对话已移出当前范围；底层上下文恢复仍可讨论。当前设计重心的完整内容只在 design-focus.md 维护。
 
@@ -55,6 +58,7 @@
 - `assistant-memory.md` 维护助手记忆要求及可选扩展，与项目资产规则分开维护。
 - `interaction-proposals.md` 保留助手提出但用户尚未逐项接受的设计，不能直接作为实施授权。
 - `prototype.md` 维护首个实际实施增量、工具契约、使用方式及验证限制。
+- `task-board.md` 维护后续独立需求及其进展；`next-batch-plan.md` 维护推荐下一批的实施计划，两者不扩大已批准的功能范围。
 
 本轮正在以项目资产方式保存讨论，尚无独立的跨会话助理记忆。更换会话时，可从此入口接续。
 

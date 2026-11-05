@@ -134,6 +134,9 @@ function Header({ masterId }: { masterId: string | undefined }) {
         onClick={() => setGlossary(true)} />
       <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!state?.assistantId}
         onClick={() => { if (state?.assistantId) openSession(state.assistantId).catch(failure => notify(errorText(failure))) }}>{t('projectAssistant')}</Button>
+      {state?.assistant && state.assistant.state !== 'ready' && <span role="status" className="dt-hint" title={state.assistant.detail}>
+        {t(state.assistant.state === 'setup-required' ? 'assistantSetupRequired' : state.assistant.state === 'failed' ? 'assistantFailed' : 'assistantStarting')}
+      </span>}
       <details><summary>{t('advanced')}</summary>
         <label><input type="checkbox" checked={state?.showRouter ?? false} onChange={event => {
           call('PUT assistant/display', { body: { show: event.target.checked } }).then(() => reload(), failure => notify(errorText(failure)))

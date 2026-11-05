@@ -9,6 +9,9 @@ const TEXT = {
   // Shared
   title: ['Superagent', 'Superagent'],
   projectAssistant: ['项目助手', 'Project assistant'],
+  assistantStarting: ['助手正在初始化', 'Assistant is starting'],
+  assistantSetupRequired: ['请先完成 GitHub 仓库与账号配置', 'Complete GitHub repository and account setup first'],
+  assistantFailed: ['助手初始化失败，请在概览查看原因', 'Assistant initialization failed; see Overview for details'],
   'health.assistant-relay': ['助手反馈投递', 'Assistant feedback delivery'],
   showRouter: ['显示后台调度会话', 'Show background routing session'],
   routerHelp: ['查看 superagent 事件路由与调度过程；隐藏入口不会停止后台运行。', 'Inspect event routing and dispatch; hiding the entry does not stop background processing.'],

@@ -80,6 +80,7 @@ export class Runtime extends Service implements SourceHost {
   readonly masterId: string
   readonly assistantId: string
   readonly assistant: Assistant
+  assistantStatus: NonNullable<HttpHost['assistantStatus']> = { state: 'starting' }
   private readonly sourceLinks = new TextCache(200_000)
   private readonly stopped = new AbortController()
   private readonly disposers: (() => void)[] = []
@@ -194,7 +195,11 @@ export class Runtime extends Service implements SourceHost {
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
-      this.ready = this.initialize()
+      this.ready = this.initialize().catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        this.assistantStatus = { state: 'failed', detail }
+        this.runtimeHealth.set({ state: 'error', detail, at: now() })
+      })
     } catch (error) {
       // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
       try { opened?.close() } finally { release() }
@@ -233,6 +238,7 @@ export class Runtime extends Service implements SourceHost {
     // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
     this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     if (!await this.setup.run(this.store.settings())) {
+      this.assistantStatus = { state: 'setup-required', detail: this.setup.problem?.detail }
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
       return
     }
@@ -246,6 +252,7 @@ export class Runtime extends Service implements SourceHost {
     for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() records its failure in health. */ })
     // If stop() was called while awaiting setup, session creation, or policy sync, do not start background loops.
     if (this.closing()) return
+    this.assistantStatus = { state: 'ready' }
     this.executor.resume()
     this.passes.start()
     this.effects.start()
@@ -253,8 +260,10 @@ export class Runtime extends Service implements SourceHost {
   }
   private httpHost(): HttpHost {
     const runtime = this
-    const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
-    return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
+    const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks, setup, passes } = this
+    return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks,
+      get ready() { return runtime.ready },
+      get assistantStatus() { return runtime.assistantStatus },
       assistantId: this.assistantId,
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },

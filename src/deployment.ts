@@ -10,11 +10,11 @@ import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const absolute = (description: string) => s.string().pattern(process.platform === 'win32' ? /^(?:[a-z]:[\\/]|[\\/])/i : /^\//)
+const absolute = (description: string) => s.string().pattern(process.platform === 'win32' ? /^(?:$|[a-z]:[\\/]|[\\/])/i : /^(?:$|\/)/)
   .description(`${description} Absolute path on the host operating system.`)
 /** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
 export const Config = s.object({
-  stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
+  stateDir: absolute('Directory for the database, locks, worker shims and ticket directories. Empty uses state/dsh-superagent beside this profile\'s cordis.patch.yml.').default(''),
   assistantWorkspace: s.string().default('').description('Absolute path to the local project checkout for the project assistant. Empty uses stateDir; repository evidence must then be fetched explicitly.'),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
     .description('Largest saved prompt configuration, in characters.').volatile(),
@@ -38,10 +38,12 @@ const MOVED: Record<string, string> = {
 }
 
 /** Read machine settings and reject unknown configuration keys (naming where deprecated keys moved). */
-export function machineOf(config: DeploymentConfig): Machine {
+export function machineOf(config: DeploymentConfig, profileStateDir?: string): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, assistantWorkspace, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
+  const { assistantWorkspace, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
+  const stateDir = config.stateDir || profileStateDir
+  if (!stateDir || !isAbsolute(stateDir)) throw new Error('stateDir must be configured when the host profile path is unavailable')
   if (assistantWorkspace && !isAbsolute(assistantWorkspace)) throw new Error('assistantWorkspace must be an absolute path')
   return { stateDir, ...(assistantWorkspace ? { assistantWorkspace } : {}), promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
 }
